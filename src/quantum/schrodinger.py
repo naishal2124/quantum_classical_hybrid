@@ -18,15 +18,6 @@ class SchrodingerSolver:
     def __init__(self, config: Dict):
         """
         Initialize the solver with configuration parameters.
-        
-        Args:
-            config: Dictionary containing:
-                - n_points: Number of spatial grid points
-                - x_min: Minimum position
-                - x_max: Maximum position
-                - mass: Particle mass
-                - potential: Potential energy function instance
-                - hbar: Reduced Planck constant (default=1.0)
         """
         self.config = config
         self.hbar = config.get('hbar', 1.0)
@@ -48,19 +39,33 @@ class SchrodingerSolver:
         self.dx = (self.x_max - self.x_min) / (self.n_points - 1)
         self.x = np.linspace(self.x_min, self.x_max, self.n_points)
         
-        # Momentum space grid
-        self.k = 2 * np.pi * np.fft.fftfreq(self.n_points, self.dx)
-        
+        # Momentum space grid for kinetic energy calculation
+        dk = 2 * np.pi / (self.x_max - self.x_min)
+        self.k = np.fft.fftfreq(self.n_points, self.dx) * 2 * np.pi
+    
+    def kinetic_energy(self, wavefunction: np.ndarray) -> np.ndarray:
+        """
+        Compute kinetic energy using spectral method
+        """
+        psi_k = np.fft.fft(wavefunction)
+        T_psi_k = -0.5 * self.hbar**2 * self.k**2 * psi_k / self.mass
+        return np.fft.ifft(T_psi_k)
+    
     def setup_hamiltonian(self):
         """
-        Construct the Hamiltonian matrix using sparse matrices.
-        H = -ℏ²/2m ∂²/∂x² + V(x)
+        Construct the Hamiltonian matrix using kinetic and potential terms
         """
-        # Kinetic energy in momentum space
-        T = 0.5 * self.hbar**2 * self.k**2 / self.mass
-        self.T = sparse.diags(T)
+        # Create identity matrix for constructing Hamiltonian
+        N = self.n_points
         
-        # Potential energy in position space
+        # Kinetic energy matrix using finite difference
+        diag = np.ones(N - 1)
+        diagonals = [-2 * np.ones(N), diag, diag]
+        positions = [0, 1, -1]
+        T = sparse.diags(diagonals, positions)
+        self.T = -0.5 * self.hbar**2 / (self.mass * self.dx**2) * T
+        
+        # Potential energy matrix
         V = self.potential(self.x)
         self.V = sparse.diags(V)
         
@@ -68,53 +73,41 @@ class SchrodingerSolver:
         self.H = self.T + self.V
     
     def solve_ground_state(self) -> Tuple[float, np.ndarray]:
-        """
-        Solve for the ground state energy and wavefunction.
-        
-        Returns:
-            Tuple of (ground state energy, ground state wavefunction)
-        """
-        # Solve for lowest eigenvalue/eigenvector
-        energy, state = eigsh(self.H, k=1, which='SA')
-        
-        # Normalize the wavefunction
-        state = state.flatten()
-        norm = np.sqrt(np.sum(np.abs(state)**2) * self.dx)
-        state /= norm
-        
-        return energy[0], state
+        """Solve for the ground state energy and wavefunction"""
+        try:
+            energy, state = eigsh(self.H, k=1, which='SA', 
+                                maxiter=5000, tol=1e-8)
+            
+            # Normalize the wavefunction
+            state = state.flatten()
+            norm = np.sqrt(np.sum(np.abs(state)**2) * self.dx)
+            state /= norm
+            
+            return energy[0], state
+            
+        except Exception as e:
+            print(f"Error in solve_ground_state: {e}")
+            raise
     
     def solve_n_states(self, n: int) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Solve for the first n eigenstates.
-        
-        Args:
-            n: Number of states to compute
+        """Solve for the first n eigenstates"""
+        try:
+            energies, states = eigsh(self.H, k=n, which='SA',
+                                   maxiter=5000, tol=1e-8)
             
-        Returns:
-            Tuple of (energies, states) where states is a matrix
-            with eigenstates as columns
-        """
-        energies, states = eigsh(self.H, k=n, which='SA')
-        
-        # Normalize each state
-        for i in range(n):
-            norm = np.sqrt(np.sum(np.abs(states[:, i])**2) * self.dx)
-            states[:, i] /= norm
-        
-        return energies, states
+            # Normalize each state
+            for i in range(n):
+                norm = np.sqrt(np.sum(np.abs(states[:, i])**2) * self.dx)
+                states[:, i] /= norm
+            
+            return energies, states
+            
+        except Exception as e:
+            print(f"Error in solve_n_states: {e}")
+            raise
     
     def compute_expectation(self, operator: sparse.spmatrix, state: np.ndarray) -> float:
-        """
-        Compute expectation value ⟨ψ|A|ψ⟩ for operator A.
-        
-        Args:
-            operator: Sparse matrix representing the operator
-            state: Wavefunction to compute expectation value with
-            
-        Returns:
-            Expectation value (real number)
-        """
+        """Compute expectation value ⟨ψ|A|ψ⟩"""
         return np.real(np.vdot(state, operator @ state) * self.dx)
     
     def position_expectation(self, state: np.ndarray) -> float:
@@ -123,7 +116,8 @@ class SchrodingerSolver:
     
     def momentum_expectation(self, state: np.ndarray) -> float:
         """Compute ⟨p⟩"""
-        return np.sum(self.k * np.abs(np.fft.fft(state))**2) * self.hbar / len(state)
+        psi_k = np.fft.fft(state)
+        return np.real(np.sum(self.k * np.abs(psi_k)**2)) * self.hbar / self.n_points
     
     def energy_expectation(self, state: np.ndarray) -> float:
         """Compute ⟨H⟩"""
