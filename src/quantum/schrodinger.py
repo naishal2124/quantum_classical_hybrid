@@ -40,32 +40,33 @@ class SchrodingerSolver:
         self.x = np.linspace(self.x_min, self.x_max, self.n_points)
         
         # Momentum space grid for kinetic energy calculation
-        dk = 2 * np.pi / (self.x_max - self.x_min)
-        self.k = np.fft.fftfreq(self.n_points, self.dx) * 2 * np.pi
-    
-    def kinetic_energy(self, wavefunction: np.ndarray) -> np.ndarray:
-        """
-        Compute kinetic energy using spectral method
-        """
-        psi_k = np.fft.fft(wavefunction)
-        T_psi_k = -0.5 * self.hbar**2 * self.k**2 * psi_k / self.mass
-        return np.fft.ifft(T_psi_k)
+        self.k = 2 * np.pi * np.fft.fftfreq(self.n_points, self.dx)
     
     def setup_hamiltonian(self):
         """
         Construct the Hamiltonian matrix using kinetic and potential terms
         """
-        # Create identity matrix for constructing Hamiltonian
-        N = self.n_points
-        
         # Kinetic energy matrix using finite difference
-        diag = np.ones(N - 1)
-        diagonals = [-2 * np.ones(N), diag, diag]
-        positions = [0, 1, -1]
-        T = sparse.diags(diagonals, positions)
-        self.T = -0.5 * self.hbar**2 / (self.mass * self.dx**2) * T
+        diagonals = []
+        offsets = []
         
-        # Potential energy matrix
+        # Second derivative approximation
+        dx2 = self.dx ** 2
+        coeff = -self.hbar**2 / (2.0 * self.mass * dx2)
+        
+        # Main diagonal
+        diagonals.append(np.ones(self.n_points) * (-2.0 * coeff))
+        offsets.append(0)
+        
+        # Off diagonals
+        diagonals.append(np.ones(self.n_points-1) * coeff)
+        diagonals.append(np.ones(self.n_points-1) * coeff)
+        offsets.extend([1, -1])
+        
+        # Create kinetic energy operator
+        self.T = sparse.diags(diagonals, offsets)
+        
+        # Potential energy operator
         V = self.potential(self.x)
         self.V = sparse.diags(V)
         
@@ -75,8 +76,9 @@ class SchrodingerSolver:
     def solve_ground_state(self) -> Tuple[float, np.ndarray]:
         """Solve for the ground state energy and wavefunction"""
         try:
-            energy, state = eigsh(self.H, k=1, which='SA', 
-                                maxiter=5000, tol=1e-8)
+            # Use higher tolerance for better convergence
+            energy, state = eigsh(self.H, k=1, which='SA',
+                                maxiter=10000, tol=1e-10)
             
             # Normalize the wavefunction
             state = state.flatten()
@@ -92,33 +94,31 @@ class SchrodingerSolver:
     def solve_n_states(self, n: int) -> Tuple[np.ndarray, np.ndarray]:
         """Solve for the first n eigenstates"""
         try:
-            energies, states = eigsh(self.H, k=n, which='SA',
-                                   maxiter=5000, tol=1e-8)
+            energy, states = eigsh(self.H, k=n, which='SA',
+                                 maxiter=10000, tol=1e-10)
             
             # Normalize each state
             for i in range(n):
                 norm = np.sqrt(np.sum(np.abs(states[:, i])**2) * self.dx)
                 states[:, i] /= norm
             
-            return energies, states
+            return energy, states
             
         except Exception as e:
             print(f"Error in solve_n_states: {e}")
             raise
     
-    def compute_expectation(self, operator: sparse.spmatrix, state: np.ndarray) -> float:
-        """Compute expectation value ⟨ψ|A|ψ⟩"""
-        return np.real(np.vdot(state, operator @ state) * self.dx)
-    
     def position_expectation(self, state: np.ndarray) -> float:
         """Compute ⟨x⟩"""
-        return np.sum(self.x * np.abs(state)**2) * self.dx
+        return np.real(np.sum(self.x * np.abs(state)**2) * self.dx)
     
     def momentum_expectation(self, state: np.ndarray) -> float:
         """Compute ⟨p⟩"""
         psi_k = np.fft.fft(state)
-        return np.real(np.sum(self.k * np.abs(psi_k)**2)) * self.hbar / self.n_points
+        k_expectation = np.sum(self.k * np.abs(psi_k)**2) / len(state)
+        return self.hbar * k_expectation
     
     def energy_expectation(self, state: np.ndarray) -> float:
         """Compute ⟨H⟩"""
-        return self.compute_expectation(self.H, state)
+        Hpsi = self.H @ state
+        return np.real(np.vdot(state, Hpsi) * self.dx)
