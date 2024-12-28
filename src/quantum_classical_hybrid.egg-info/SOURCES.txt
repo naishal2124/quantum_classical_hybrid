@@ -1,0 +1,16 @@
+README.md
+setup.py
+src/classical/__init__.py
+src/neural/__init__.py
+src/pimc/__init__.py
+src/quantum/__init__.py
+src/quantum/operators.py
+src/quantum/potentials.py
+src/quantum/schrodinger.py
+src/quantum/wavefunctions.py
+src/quantum_classical_hybrid.egg-info/PKG-INFO
+src/quantum_classical_hybrid.egg-info/SOURCES.txt
+src/quantum_classical_hybrid.egg-info/dependency_links.txt
+src/quantum_classical_hybrid.egg-info/requires.txt
+src/quantum_classical_hybrid.egg-info/top_level.txt
+src/utils/__init__.py

@@ -69,22 +69,27 @@ class SimpleRBM(WaveFunction):
             log(ψ(x)) (batch_size,)
         """
         if self.complex:
+            # Convert input to complex if needed
+            if not x.is_complex():
+                x = x.to(torch.cfloat)
+            
             # Compute visible term
-            visible_term = (x @ self.a_real + 1j * x @ self.a_imag)
+            visible_term = torch.matmul(x, (self.a_real + 1j * self.a_imag))
             
             # Compute hidden term
-            z_real = x @ self.W_real + self.b_real
-            z_imag = x @ self.W_imag + self.b_imag
+            z = torch.matmul(x, (self.W_real + 1j * self.W_imag)) + \
+                (self.b_real + 1j * self.b_imag)
             
             hidden_term = torch.sum(
-                torch.log(1 + torch.exp(z_real + 1j * z_imag)), dim=1
+                torch.log(1 + torch.exp(z)), dim=1
             )
             
             return visible_term + hidden_term
         else:
-            visible_term = x @ self.a
+            visible_term = torch.matmul(x, self.a)
             hidden_term = torch.sum(
-                torch.log(1 + torch.exp(x @ self.W + self.b)), dim=1
+                torch.log(1 + torch.exp(torch.matmul(x, self.W) + self.b)), 
+                dim=1
             )
             return visible_term + hidden_term
 
@@ -98,7 +103,7 @@ class FFNN(WaveFunction):
                  n_input: int,
                  hidden_dims: List[int],
                  complex: bool = True,
-                 activation: str = 'tanh'):
+                 activation: str = 'Tanh'):
         super().__init__()
         self.complex = complex
         
@@ -131,6 +136,8 @@ class FFNN(WaveFunction):
         Returns:
             log(ψ(x)) (batch_size,)
         """
+        if self.complex and not x.is_complex():
+            x = x.to(torch.cfloat)
         return self.network(x).squeeze(-1)
 
 class ComplexLinear(nn.Module):
@@ -157,7 +164,16 @@ class ComplexActivation(nn.Module):
     
     def __init__(self, activation: str):
         super().__init__()
-        self.activation = getattr(nn, activation)()
+        activation_map = {
+            'Tanh': nn.Tanh,
+            'ReLU': nn.ReLU,
+            'Sigmoid': nn.Sigmoid
+        }
+        if activation not in activation_map:
+            raise ValueError(f"Unsupported activation: {activation}")
+        self.activation = activation_map[activation]()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.activation(x.real) + 1j * self.activation(x.imag)
+        if torch.is_complex(x):
+            return self.activation(x.real) + 1j * self.activation(x.imag)
+        return self.activation(x)

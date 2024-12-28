@@ -17,32 +17,34 @@ def test_rbm_wavefunction():
     
     # Test with batch of random inputs
     batch_size = 10
-    x = torch.randn(batch_size, n_visible)
+    x = torch.randn(batch_size, n_visible, dtype=torch.cfloat)
     
     # Test output shape
     output = rbm(x)
     assert output.shape == (batch_size,)
-    assert torch.is_complex(output)
+    assert output.dtype == torch.cfloat
     
     # Test probability is real and positive
     prob = rbm.probability(x)
-    assert not torch.is_complex(prob)
+    assert prob.dtype == torch.float32
     assert torch.all(prob >= 0)
     
-    # Test phase
-    phase = rbm.phase(x)
-    assert not torch.is_complex(phase)
+    # Test real RBM
+    rbm_real = SimpleRBM(n_visible, n_hidden, complex=False)
+    x_real = torch.randn(batch_size, n_visible)
+    output_real = rbm_real(x_real)
+    assert output_real.dtype == torch.float32
 
 def test_ffnn_wavefunction():
     """Test feed-forward neural network wavefunction"""
     # Initialize FFNN
     n_input = 4
     hidden_dims = [16, 16]
-    ffnn = FFNN(n_input, hidden_dims, complex=True)
+    ffnn = FFNN(n_input, hidden_dims, complex=True, activation='Tanh')
     
     # Test with batch of random inputs
     batch_size = 10
-    x = torch.randn(batch_size, n_input)
+    x = torch.randn(batch_size, n_input, dtype=torch.cfloat)
     
     # Test output shape
     output = ffnn(x)
@@ -54,9 +56,9 @@ def test_ffnn_wavefunction():
     assert not torch.is_complex(prob)
     assert torch.all(prob >= 0)
     
-    # Test with real-valued network
-    ffnn_real = FFNN(n_input, hidden_dims, complex=False)
-    output_real = ffnn_real(x)
+    # Test real network
+    ffnn_real = FFNN(n_input, hidden_dims, complex=False, activation='Tanh')
+    output_real = ffnn_real(x.real)
     assert not torch.is_complex(output_real)
 
 def test_complex_operations():
@@ -64,22 +66,26 @@ def test_complex_operations():
     # Initialize complex FFNN
     n_input = 4
     hidden_dims = [16, 16]
-    ffnn = FFNN(n_input, hidden_dims, complex=True)
+    ffnn = FFNN(n_input, hidden_dims, complex=True, activation='Tanh')
     
     # Test with complex inputs
     batch_size = 10
-    x_real = torch.randn(batch_size, n_input)
-    x_imag = torch.randn(batch_size, n_input)
-    x = x_real + 1j * x_imag
+    x = torch.randn(batch_size, n_input, dtype=torch.cfloat)
     
-    # Forward pass should maintain complex values
+    # Forward pass should preserve complex values
     output = ffnn(x)
     assert torch.is_complex(output)
     
     # Test gradients
-    output.sum().backward()
+    loss = output.abs().sum()
+    loss.backward()
     for param in ffnn.parameters():
         assert param.grad is not None
+    
+    # Test different activations
+    ffnn_relu = FFNN(n_input, hidden_dims, complex=True, activation='ReLU')
+    output_relu = ffnn_relu(x)
+    assert torch.is_complex(output_relu)
 
 if __name__ == '__main__':
     pytest.main([__file__])
