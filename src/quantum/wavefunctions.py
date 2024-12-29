@@ -1,106 +1,174 @@
 """
-Quantum mechanical wavefunctions and their properties.
+Quantum mechanical wavefunction representations and manipulations.
+Implements various wavefunction classes and utilities for quantum calculations.
 """
 
 import numpy as np
+import math
+from typing import Optional, Union, Tuple, Callable
 from scipy.special import hermite
-from typing import Optional, Tuple, Union
+from dataclasses import dataclass
+from .operators import Operator
+from .potentials import Potential, HarmonicOscillator
 
-class WaveFunction:
+@dataclass
+class WavefunctionParams:
+    """Parameters for wavefunction initialization"""
+    center: float = 0.0  # Center of wavepacket
+    momentum: float = 0.0  # Initial momentum
+    width: float = 1.0  # Width parameter
+    phase: float = 0.0  # Initial phase
+    mass: float = 1.0  # Particle mass
+    hbar: float = 1.0  # Reduced Planck's constant
+
+class Wavefunction:
     """Base class for quantum mechanical wavefunctions"""
     
-    def __init__(self, grid: np.ndarray):
-        self.grid = grid
-        self.dx = grid[1] - grid[0]
-        self.psi = None
+    def __init__(self, grid_points: int, dx: float, params: Optional[dict] = None):
+        """
+        Initialize wavefunction on spatial grid.
+        
+        Args:
+            grid_points: Number of spatial grid points
+            dx: Grid spacing
+            params: Dictionary of wavefunction parameters
+        """
+        self.N = grid_points
+        self.dx = dx
+        self.params = WavefunctionParams(**params) if params else WavefunctionParams()
+        
+        # Set up spatial grid
+        self.grid_length = self.N * self.dx
+        self.x = np.linspace(-self.grid_length/2, self.grid_length/2, self.N)
+        self.k = 2 * np.pi * np.fft.fftfreq(self.N, self.dx)
+        
+        # Initialize wavefunction array
+        self.psi = np.zeros(self.N, dtype=np.complex128)
+        self._initialize()
+        self.normalize()
     
-    def __call__(self, x: Optional[np.ndarray] = None) -> np.ndarray:
-        """Evaluate wavefunction at points x"""
-        if self.psi is None:
-            self._build_wavefunction()
-        if x is None:
-            return self.psi
-        return np.interp(x, self.grid, self.psi)
-    
-    def _build_wavefunction(self):
-        """Build the wavefunction"""
+    def _initialize(self):
+        """Initialize wavefunction values - to be implemented by subclasses"""
         raise NotImplementedError
     
     def normalize(self):
-        """Normalize the wavefunction"""
+        """Normalize wavefunction to unit probability"""
         norm = np.sqrt(np.sum(np.abs(self.psi)**2) * self.dx)
-        self.psi /= norm
+        if norm > 0:
+            self.psi /= norm
+    
+    def expectation_value(self, operator: Operator) -> float:
+        """
+        Compute expectation value of an operator.
+        
+        Args:
+            operator: Quantum mechanical operator
+            
+        Returns:
+            float: Expectation value ⟨ψ|A|ψ⟩
+        """
+        return operator.expectation_value(self.psi)
     
     def probability_density(self) -> np.ndarray:
-        """Compute |ψ(x)|²"""
-        return np.abs(self.__call__())**2
+        """Return probability density |ψ(x)|²"""
+        return np.abs(self.psi)**2
+    
+    def probability_current(self) -> np.ndarray:
+        """
+        Compute probability current j(x) = ℏ/m Im(ψ*∂ψ/∂x)
+        """
+        # Compute derivative using spectral method
+        psi_k = np.fft.fft(self.psi)
+        dpsi_dx = np.fft.ifft(1j * self.k * psi_k)
+        
+        return (self.params.hbar/self.params.mass * 
+                np.imag(np.conj(self.psi) * dpsi_dx))
 
-class GaussianWavePacket(WaveFunction):
-    """Gaussian wave packet ψ(x) = exp(-(x-x₀)²/4σ² + ik₀x)"""
-    
-    def __init__(self, grid: np.ndarray, x0: float = 0.0, 
-                 k0: float = 0.0, sigma: float = 1.0):
-        super().__init__(grid)
-        self.x0 = x0
-        self.k0 = k0
-        self.sigma = sigma
-    
-    def _build_wavefunction(self):
-        x = self.grid
-        self.psi = np.exp(-(x - self.x0)**2 / (4 * self.sigma**2) + 
-                         1j * self.k0 * x)
-        self.normalize()
+class GaussianWavepacket(Wavefunction):
+    """
+    Gaussian wavepacket ψ(x) = exp(-(x-x₀)²/4σ² + ik₀x + iφ)
+    """
+    def _initialize(self):
+        """Initialize Gaussian wavepacket"""
+        x0 = self.params.center
+        k0 = self.params.momentum / self.params.hbar  # Corrected wavevector
+        sigma = self.params.width
+        phi = self.params.phase
+        
+        # Ensure proper normalization
+        norm_factor = (2 * np.pi * sigma**2)**(-0.25)
+        self.psi = norm_factor * np.exp(-(self.x - x0)**2 / (4 * sigma**2) + 
+                                      1j * k0 * self.x + 1j * phi)
 
-class HarmonicOscillator(WaveFunction):
-    """Harmonic oscillator eigenstate ψₙ(x)"""
-    
-    def __init__(self, grid: np.ndarray, n: int = 0, 
-                 omega: float = 1.0, mass: float = 1.0, hbar: float = 1.0):
-        super().__init__(grid)
+class HarmonicOscillatorState(Wavefunction):
+    """
+    Harmonic oscillator eigenstate ψₙ(x)
+    """
+    def __init__(self, grid_points: int, dx: float, n: int = 0, 
+                 params: Optional[dict] = None):
+        """
+        Initialize nth harmonic oscillator eigenstate.
+        
+        Args:
+            grid_points: Number of spatial grid points
+            dx: Grid spacing
+            n: Quantum number (default: 0 for ground state)
+            params: Dictionary of wavefunction parameters
+        """
         self.n = n
-        self.omega = omega
-        self.mass = mass
-        self.hbar = hbar
+        super().__init__(grid_points, dx, params)
     
-    def _build_wavefunction(self):
-        x = self.grid
+    def _initialize(self):
+        """Initialize harmonic oscillator eigenstate"""
+        # Extract parameters
+        m = self.params.mass
+        hbar = self.params.hbar
+        omega = 1.0  # Default frequency
+        
         # Characteristic length
-        alpha = np.sqrt(self.mass * self.omega / self.hbar)
+        alpha = np.sqrt(m * omega / hbar)
         
-        # Normalized Hermite polynomial
+        # Hermite polynomial
+        xi = alpha * self.x
         Hn = hermite(self.n)
-        prefactor = 1.0 / np.sqrt(2**self.n * np.math.factorial(self.n))
-        prefactor *= (alpha / np.pi)**0.25
         
-        self.psi = prefactor * Hn(alpha * x) * np.exp(-alpha * x**2 / 2)
-        self.normalize()
+        # Normalization
+        N = 1.0 / np.sqrt(2**self.n * math.factorial(self.n)) * (alpha/np.pi)**0.25
+        
+        # Wavefunction
+        self.psi = N * Hn(xi) * np.exp(-xi**2 / 2)
 
-class DoubleWell(WaveFunction):
-    """Double well potential eigenstate"""
-    
-    def __init__(self, grid: np.ndarray, n: int = 0, 
-                 a: float = 1.0, b: float = 0.25):
-        super().__init__(grid)
-        self.n = n
-        self.a = a  # Well depth
-        self.b = b  # Barrier height
-    
-    def _build_wavefunction(self):
-        # For n=0,1, approximate as symmetric/antisymmetric combinations
-        # of Gaussian states centered at potential minima
-        x = self.grid
-        x_min = np.sqrt(self.a / (2 * self.b))
+class SuperpositionState(Wavefunction):
+    """
+    Superposition of quantum states ψ = Σᵢcᵢψᵢ
+    """
+    def __init__(self, states: list[Wavefunction], 
+                 coefficients: Optional[np.ndarray] = None):
+        """
+        Initialize superposition state.
         
-        # Gaussian states centered at ±x_min
-        psi_left = np.exp(-(x + x_min)**2 / 2)
-        psi_right = np.exp(-(x - x_min)**2 / 2)
+        Args:
+            states: List of component wavefunctions
+            coefficients: Complex coefficients for superposition
+        """
+        # Verify all states have same grid
+        if not all(state.N == states[0].N and 
+                  np.allclose(state.x, states[0].x) for state in states):
+            raise ValueError("All states must be defined on same grid")
         
-        # Symmetric (n=0) or antisymmetric (n=1) combination
-        if self.n == 0:
-            self.psi = psi_left + psi_right
-        elif self.n == 1:
-            self.psi = psi_left - psi_right
-        else:
-            raise NotImplementedError("Only n=0,1 implemented")
+        self.N = states[0].N
+        self.dx = states[0].dx
+        self.x = states[0].x
+        self.k = states[0].k
         
+        # Default to equal superposition if no coefficients given
+        if coefficients is None:
+            coefficients = np.ones(len(states)) / np.sqrt(len(states))
+        
+        if len(coefficients) != len(states):
+            raise ValueError("Number of coefficients must match number of states")
+            
+        # Construct superposition
+        self.psi = np.sum([c * state.psi for c, state in 
+                          zip(coefficients, states)], axis=0)
         self.normalize()

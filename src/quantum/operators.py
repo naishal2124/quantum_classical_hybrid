@@ -5,7 +5,6 @@ Quantum mechanical operators and their matrix representations.
 import numpy as np
 from scipy import sparse
 from typing import Optional, Tuple, Union
-import torch
 
 class Operator:
     """Base class for quantum mechanical operators"""
@@ -15,6 +14,11 @@ class Operator:
         self.dx = dx
         self.hbar = hbar
         self.matrix = None
+        
+        # Set up spatial grid
+        self.grid_length = self.N * self.dx
+        self.x = np.linspace(-self.grid_length/2, self.grid_length/2, self.N)
+        self.k = 2 * np.pi * np.fft.fftfreq(self.N, self.dx)
     
     def to_matrix(self) -> sparse.spmatrix:
         """Convert operator to sparse matrix representation"""
@@ -28,30 +32,33 @@ class Operator:
     
     def expectation_value(self, wavefunction: np.ndarray) -> float:
         """Compute expectation value ⟨ψ|A|ψ⟩"""
-        return np.real(np.vdot(wavefunction, self.to_matrix() @ wavefunction) * self.dx)
+        if not isinstance(wavefunction, np.ndarray):
+            wavefunction = np.array(wavefunction)
+        matrix = self.to_matrix()
+        return float(np.real(np.sum(np.conj(wavefunction) * (matrix @ wavefunction)) * self.dx))
 
 class Position(Operator):
     """Position operator x"""
     
     def _build_matrix(self):
-        x = np.linspace(-self.N/2 * self.dx, self.N/2 * self.dx, self.N)
-        self.matrix = sparse.diags(x)
+        """Build position operator matrix"""
+        self.matrix = sparse.diags(self.x)
+    
+    def expectation_value(self, wavefunction: np.ndarray) -> float:
+        """Compute position expectation value"""
+        return float(np.real(np.sum(self.x * np.abs(wavefunction)**2) * self.dx))
 
 class Momentum(Operator):
     """Momentum operator p = -iℏ∂/∂x"""
     
     def _build_matrix(self):
-        # Use central difference for first derivative
-        diagonals = []
-        offsets = []
-        
-        # Off-diagonal elements
-        diagonals.append(np.ones(self.N-1))  # Upper diagonal
-        diagonals.append(-np.ones(self.N-1))  # Lower diagonal
-        offsets.extend([1, -1])
-        
-        self.matrix = -1j * self.hbar / (2 * self.dx) * \
-                     sparse.diags(diagonals, offsets)
+        """Build momentum operator using spectral method"""
+        self.matrix = sparse.diags(self.hbar * self.k)
+    
+    def expectation_value(self, wavefunction: np.ndarray) -> float:
+        """Compute momentum expectation value using spectral method"""
+        psi_k = np.fft.fft(wavefunction) / np.sqrt(self.N)
+        return float(np.real(np.sum(self.hbar * self.k * np.abs(psi_k)**2) * self.dx))
 
 class KineticEnergy(Operator):
     """Kinetic energy operator T = -ℏ²/2m ∂²/∂x²"""
@@ -61,32 +68,33 @@ class KineticEnergy(Operator):
         self.mass = mass
     
     def _build_matrix(self):
-        # Use second-order central difference
-        diagonals = []
-        offsets = []
-        
-        # Main diagonal
-        diagonals.append(-2 * np.ones(self.N))
-        offsets.append(0)
-        
-        # Off-diagonals
-        diagonals.extend([np.ones(self.N-1), np.ones(self.N-1)])
-        offsets.extend([1, -1])
-        
-        self.matrix = -self.hbar**2 / (2 * self.mass * self.dx**2) * \
-                     sparse.diags(diagonals, offsets)
+        """Build kinetic energy operator using spectral method"""
+        k = self.k
+        T_k = 0.5 * self.hbar**2 * k**2 / self.mass
+        self.matrix = sparse.diags(T_k)
+    
+    def expectation_value(self, wavefunction: np.ndarray) -> float:
+        """Compute kinetic energy expectation value using spectral method"""
+        psi_k = np.fft.fft(wavefunction) / np.sqrt(self.N)
+        T_k = 0.5 * self.hbar**2 * self.k**2 / self.mass
+        return float(np.real(np.sum(T_k * np.abs(psi_k)**2) * self.dx))
 
 class PotentialEnergy(Operator):
     """Potential energy operator V(x)"""
     
-    def __init__(self, potential_func, grid_points: int, dx: float):
-        super().__init__(grid_points, dx)
+    def __init__(self, potential_func, grid_points: int, dx: float, hbar: float = 1.0):
+        super().__init__(grid_points, dx, hbar)
         self.potential_func = potential_func
-        
+    
     def _build_matrix(self):
-        x = np.linspace(-self.N/2 * self.dx, self.N/2 * self.dx, self.N)
-        V = self.potential_func(x)
+        """Build potential energy operator"""
+        V = self.potential_func(self.x)
         self.matrix = sparse.diags(V)
+    
+    def expectation_value(self, wavefunction: np.ndarray) -> float:
+        """Compute potential energy expectation value"""
+        V = self.potential_func(self.x)
+        return float(np.real(np.sum(V * np.abs(wavefunction)**2) * self.dx))
 
 class Hamiltonian(Operator):
     """Hamiltonian operator H = T + V"""
@@ -97,4 +105,11 @@ class Hamiltonian(Operator):
         self.V = V
     
     def _build_matrix(self):
+        """Build Hamiltonian operator"""
         self.matrix = self.T.to_matrix() + self.V.to_matrix()
+    
+    def expectation_value(self, wavefunction: np.ndarray) -> float:
+        """Compute total energy expectation value"""
+        T = self.T.expectation_value(wavefunction)
+        V = self.V.expectation_value(wavefunction)
+        return T + V
