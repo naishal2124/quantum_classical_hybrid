@@ -28,13 +28,7 @@ class EuclideanAction:
     """
     
     def __init__(self, potential: Potential, params: Optional[dict] = None):
-        """
-        Initialize Euclidean action.
-        
-        Args:
-            potential: Quantum potential energy function
-            params: Optional parameters for action
-        """
+        """Initialize Euclidean action."""
         self.potential = potential
         self.params = ActionParameters(**params if params else {})
         
@@ -44,61 +38,31 @@ class EuclideanAction:
         self.hbar = self.params.hbar
         
         # Spring constant for kinetic action
-        self.k = self.mass / (2.0 * self.hbar * self.dtau)
+        self.k = self.mass / (2.0 * self.dtau * self.hbar**2)
+    
+    def _get_differences(self, path: np.ndarray, forward: bool = True) -> np.ndarray:
+        """Helper to compute periodic differences."""
+        if forward:
+            return np.roll(path, -1) - path
+        else:
+            return path - np.roll(path, 1)
     
     def kinetic(self, path: np.ndarray) -> np.ndarray:
-        """
-        Compute kinetic part of action for each slice.
-        
-        Args:
-            path: Path configuration [n_slices]
-            
-        Returns:
-            Kinetic action per slice [n_slices]
-        """
-        n = len(path)
-        dx = np.zeros_like(path)
-        # Compute differences with periodic boundary
-        dx[:-1] = path[1:] - path[:-1]
-        dx[-1] = path[0] - path[-1]
+        """Compute kinetic part of action for each slice."""
+        dx = self._get_differences(path, forward=True)
         return self.k * dx**2
     
     def potential_energy(self, path: np.ndarray) -> np.ndarray:
-        """
-        Compute potential part of action for each slice.
-        
-        Args:
-            path: Path configuration [n_slices]
-            
-        Returns:
-            Potential action per slice [n_slices]
-        """
-        V = self.potential(path)
-        return V * self.dtau
+        """Compute potential part of action for each slice."""
+        # Full imaginary time weighting for each slice
+        return self.potential(path) * self.dtau
     
     def total(self, path: np.ndarray) -> float:
-        """
-        Compute total Euclidean action.
-        
-        Args:
-            path: Path configuration [n_slices]
-            
-        Returns:
-            Total action (dimensionless)
-        """
+        """Compute total Euclidean action."""
         return np.sum(self.kinetic(path) + self.potential_energy(path))
     
     def local_action(self, path: np.ndarray, slice_idx: int) -> float:
-        """
-        Compute action change for single slice.
-        
-        Args:
-            path: Path configuration [n_slices]
-            slice_idx: Index of time slice
-            
-        Returns:
-            Local action contribution
-        """
+        """Compute action change for single slice."""
         n = len(path)
         prev_idx = (slice_idx - 1) % n
         next_idx = (slice_idx + 1) % n
@@ -114,41 +78,21 @@ class EuclideanAction:
         return kinetic + potential
     
     def force(self, path: np.ndarray) -> np.ndarray:
-        """
-        Compute forces -∂S/∂x for all slices.
-        
-        Args:
-            path: Path configuration [n_slices]
-            
-        Returns:
-            Forces for each slice [n_slices]
-        """
-        n = len(path)
-        forces = np.zeros_like(path)
-        
-        # Kinetic force
-        for i in range(n):
-            prev_idx = (i - 1) % n
-            next_idx = (i + 1) % n
-            dx_prev = path[i] - path[prev_idx]
-            dx_next = path[next_idx] - path[i]
-            forces[i] = -2 * self.k * (dx_next - dx_prev)
+        """Compute forces -∂S/∂x for all slices."""
+        # Kinetic force from both neighbors
+        dx_forward = self._get_differences(path, forward=True)
+        dx_backward = self._get_differences(path, forward=False)
+        kinetic_force = -2.0 * self.k * (dx_forward - dx_backward)
         
         # Potential force
-        forces -= self.potential.gradient(path) * self.dtau
+        potential_force = -self.dtau * self.potential.gradient(path)
         
-        return forces
+        return kinetic_force + potential_force
     
     def thermodynamic_energy(self, paths: np.ndarray) -> Tuple[float, float]:
         """
         Compute thermodynamic energy estimator.
-        E = -∂/∂β log(Z) = ⟨(1/2)m(dx/dτ)² + V(x) - (N/2β)⟩
-        
-        Args:
-            paths: Multiple path configurations [n_paths, n_slices]
-            
-        Returns:
-            Tuple of (energy, error estimate)
+        Uses primitive and virial estimators with proper weighting.
         """
         n_paths, n_slices = paths.shape
         energies = np.zeros(n_paths)
@@ -156,18 +100,20 @@ class EuclideanAction:
         for i in range(n_paths):
             path = paths[i]
             
-            # Kinetic energy term
-            dx = np.zeros_like(path)
-            dx[:-1] = path[1:] - path[:-1]
-            dx[-1] = path[0] - path[-1]
-            kinetic = np.sum(dx**2) * self.mass / (2 * self.hbar**2 * self.dtau)
+            # Primitive kinetic energy estimator
+            dx = self._get_differences(path, forward=True)
+            ke_primitive = np.mean(dx**2) * self.mass / (2.0 * self.dtau * self.hbar**2)
             
-            # Potential energy term
-            potential = np.sum(self.potential(path)) / n_slices
+            # Virial estimator terms
+            x_avg = np.mean(path)
+            v_grad = np.mean(self.potential.gradient(path) * (path - x_avg))
+            ke_virial = v_grad / 2.0
             
-            # Zero point energy correction
-            zero_point = n_slices / (2 * self.params.beta)
+            # Potential energy
+            pe = np.mean(self.potential(path))
             
-            energies[i] = (kinetic + potential - zero_point) / n_slices
+            # Combined estimator with temperature correction
+            zero_point = 1.0 / (2.0 * self.params.beta)
+            energies[i] = 0.5 * (ke_primitive + ke_virial) + pe - zero_point
         
         return np.mean(energies), np.std(energies) / np.sqrt(n_paths)

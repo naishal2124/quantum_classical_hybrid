@@ -1,4 +1,3 @@
-# test_action.py
 """
 Tests for Euclidean action implementation.
 Validates action calculations and thermodynamic estimators.
@@ -54,10 +53,8 @@ def test_potential_action(harmonic_action, gaussian_path):
     """Test potential part of action"""
     potential = harmonic_action.potential_energy(gaussian_path)
     
-    # Test shape
+    # Test shape and positivity
     assert potential.shape == gaussian_path.shape
-    
-    # Test positivity for harmonic oscillator
     assert np.all(potential >= 0)
     
     # Test scaling with dtau
@@ -85,10 +82,8 @@ def test_local_action(harmonic_action, gaussian_path):
     slice_idx = 5
     local = harmonic_action.local_action(gaussian_path, slice_idx)
     
-    # Should be scalar
+    # Should be scalar and positive for harmonic oscillator
     assert np.isscalar(local)
-    
-    # Should be positive for harmonic oscillator
     assert local >= 0
     
     # Test periodic boundary handling
@@ -100,17 +95,17 @@ def test_force(harmonic_action, gaussian_path):
     """Test force computation"""
     force = harmonic_action.force(gaussian_path)
     
-    # Test shape
+    # Test shape and scaling for harmonic oscillator
     assert force.shape == gaussian_path.shape
     
-    # For harmonic oscillator, force should be linear in displacement
+    # Force should be zero at origin
     x0 = np.zeros_like(gaussian_path)
     f0 = harmonic_action.force(x0)
-    assert np.allclose(f0, 0.0)  # Force zero at origin
+    assert np.allclose(f0, 0.0)
     
-    # Test scaling with position
+    # Test linear scaling
     force_2x = harmonic_action.force(2 * gaussian_path)
-    assert np.allclose(force_2x, 2 * force)  # Linear force law
+    assert np.allclose(force_2x, 2 * force)
 
 def test_thermodynamic_energy(harmonic_action):
     """Test thermodynamic energy estimator"""
